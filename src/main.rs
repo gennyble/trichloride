@@ -192,6 +192,7 @@ pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx
 
 	loop {
 		if shutdown.load(Ordering::Relaxed) {
+			h264.done();
 			break;
 		}
 
@@ -213,11 +214,20 @@ struct Maybeh264 {
 
 pub struct Outh264 {
 	maybe: Option<Maybeh264>,
+	mp4: Option<Mp4Writer<File>>,
+	ticks: u64,
 }
 
 impl Outh264 {
+	/// 30fps
+	const TPS: u32 = 1000 / 30;
+
 	pub fn new() -> Self {
-		Self { maybe: None }
+		Self {
+			maybe: None,
+			mp4: None,
+			ticks: 0,
+		}
 	}
 
 	pub fn frame(&mut self, buffer: &Buffer) {
@@ -244,41 +254,190 @@ impl Outh264 {
 
 		buffer.as_rgb_bytes(&mut yes.rgb);
 		yes.yuvbuffer.read_rgb(&yes.rgb);
-		let nal_owned = yes.encoder.encode(&yes.yuvbuffer).unwrap().to_vec();
-		let mut nal = &nal_owned[..];
+		let out = yes.encoder.encode(&yes.yuvbuffer).unwrap().to_vec();
 
-		println!("Entering NAL loop");
+		let writer = match self.mp4.as_mut() {
+			None => {
+				// We need to make it, oh no
+				// Find the SPS and Pps
+				let nals = Self::nal_split(&out);
+				let sps = nals
+					.iter()
+					.find(|nal| nal.kind == NalType::Sps)
+					.unwrap()
+					.as_full_unit();
+				let pps = nals
+					.iter()
+					.find(|nal| nal.kind == NalType::Pps)
+					.unwrap()
+					.as_full_unit();
+				let writer = Self::make_mp4(sps.as_slice(), pps.as_slice());
+				self.mp4 = Some(writer);
+				self.mp4.as_mut().unwrap()
+			}
+			Some(mp4) => mp4,
+		};
+
+		let sample = Mp4Sample {
+			start_time: self.ticks,
+			duration: Self::TPS,
+			rendering_offset: 0,
+			is_sync: false,
+			bytes: Bytes::from(out),
+		};
+		self.ticks += Self::TPS as u64;
+
+		writer.write_sample(1, &sample).unwrap();
+	}
+
+	pub fn done(&mut self) {
+		self.mp4.as_mut().unwrap().write_end().unwrap();
+	}
+
+	// We need to find the Sequence Parameter Set and Picture Parameter Set
+	// https://amble.quest/notice/AU1JHnpqbb7L2LgiaO
+
+	fn nal_split<'a>(buf: &'a [u8]) -> Vec<Nal<'a>> {
+		let mut nal = &buf[..];
+
+		let mut ret = vec![];
 		loop {
+			println!("{}", nal.len());
 			if nal.len() == 0 {
 				break;
 			}
 
-			nal = match &nal[0..nal.len().min(4)] {
+			let lead_type = match &nal[0..nal.len().min(4)] {
 				[0, 0, 0, 1] => {
-					println!("0001 style");
-					&nal[4..]
+					nal = &nal[4..];
+					LeadType::Null3
 				}
 				[0, 0, 1, _] => {
-					println!("001 style");
-					&nal[3..]
+					nal = &nal[3..];
+					LeadType::Null2
 				}
 				_ => {
-					nal = &nal[1..];
-					continue;
+					println!("NO NAL AHHHHHHH");
+					break;
 				}
 			};
 
 			let nal_id = nal[0];
+			// "NAL AND ID" (the ID bitwise anded with 0x1F)
 			let nal_aid = nal_id & 0x1F;
-			println!("{nal_id} or with the bitwise and, {}", nal_id & 0x1F);
+			//println!("{nal_id} or with the bitwise and, {}", nal_id & 0x1F);
 
-			match nal_aid {
-				7 => println!("GOT SPS GENNY LOOK LOOK"),
-				9 => println!("LOOK GOT PPS PICTURE PICTURE PIUCTURE"),
-				_ => (),
+			let kind = match nal_aid {
+				7 => NalType::Sps,
+				8 => NalType::Pps,
+				k => NalType::Other(k),
+			};
+
+			nal = &nal[1..];
+
+			// Find the next header. I should do this in the "main loop" but I already didn't and this is easier now
+			let mut len = 1;
+			'find_next: loop {
+				match &nal[len..] {
+					[0, 0, 1, ..] | [0, 0, 0, 1, ..] => {
+						ret.push(Nal {
+							lead_type,
+							kind,
+							data: &nal[..len],
+						});
+						nal = &nal[len..];
+
+						break 'find_next;
+					}
+					[] => {
+						ret.push(Nal {
+							lead_type,
+							kind,
+							data: &nal[..],
+						});
+						nal = &[];
+
+						break 'find_next;
+					}
+					_ => len += 1,
+				}
 			}
 		}
+
+		ret
 	}
+
+	fn make_mp4(sps: &[u8], pps: &[u8]) -> Mp4Writer<File> {
+		let config = Mp4Config {
+			major_brand: "isom".parse().unwrap(),
+			minor_version: 512,
+			compatible_brands: vec![
+				str::parse("isom").unwrap(),
+				str::parse("iso2").unwrap(),
+				str::parse("avc1").unwrap(),
+				str::parse("mp41").unwrap(),
+			],
+			timescale: 1000,
+		};
+
+		let file = File::create("out.mp4").unwrap();
+		let mut writer = Mp4Writer::write_start(file, &config).unwrap();
+
+		let track_config = TrackConfig {
+			track_type: mp4::TrackType::Video,
+			timescale: 1000,
+			language: String::from("en"),
+			media_conf: MediaConfig::AvcConfig(AvcConfig {
+				width: 1280,
+				height: 720,
+				seq_param_set: sps.to_vec(),
+				pic_param_set: pps.to_vec(),
+			}),
+		};
+
+		writer.add_track(&track_config).unwrap();
+
+		writer
+	}
+}
+
+struct Nal<'a> {
+	lead_type: LeadType,
+	kind: NalType,
+	data: &'a [u8],
+}
+
+impl<'a> Nal<'a> {
+	pub fn as_full_unit(&self) -> Vec<u8> {
+		let mut ret = vec![];
+
+		match self.lead_type {
+			LeadType::Null2 => ret.extend_from_slice(&[0x00, 0x00, 0x01]),
+			LeadType::Null3 => ret.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]),
+		}
+
+		let id = match self.kind {
+			NalType::Sps => 7,
+			NalType::Pps => 8,
+			NalType::Other(o) => o,
+		} | 0b1100_0000;
+
+		ret.push(id);
+		ret.extend_from_slice(self.data);
+		ret
+	}
+}
+
+enum LeadType {
+	Null2,
+	Null3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+enum NalType {
+	Other(u8),
+	Sps,
+	Pps,
 }
 
 /*pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
