@@ -1,8 +1,10 @@
 mod nv12scary;
 
 use std::{
+	fs::File,
 	sync::{
 		atomic::{AtomicBool, Ordering},
+		mpsc::{channel, Receiver},
 		Arc, RwLock,
 	},
 	thread::JoinHandle,
@@ -13,10 +15,15 @@ use fluffy::{
 	event_loop::{ControlFlow, EventLoopProxy},
 	Buffer, FluffyWindow, PhysicalSize, WindowBuilder,
 };
+use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig};
 use nokhwa::{
 	pixel_format::RgbFormat,
 	utils::{CameraIndex, RequestedFormat, RequestedFormatType},
 	Camera,
+};
+use openh264::{
+	encoder::{Encoder, EncoderConfig},
+	formats::YUVBuffer,
 };
 
 fn main() {
@@ -34,6 +41,10 @@ fn main() {
 	println!("Getting camera!");
 	let mut camera = start_camera(proxy, shutdown.clone());
 
+	println!("Starting h264 output thread");
+	let (tx, rx) = channel();
+	let mut h264 = start_mp4_h264_writer(camera.shared_frame.clone(), shutdown.clone(), rx);
+
 	el.run(move |event, _, flow| {
 		*flow = ControlFlow::Wait;
 
@@ -46,6 +57,8 @@ fn main() {
 				camera.join();
 			}
 			Event::UserEvent(()) => {
+				tx.send(()).unwrap();
+
 				// Frame received! Shove it in our buffer and request redraw
 				let read = camera.shared_frame.read().unwrap();
 				let scaled = neam::nearest(
@@ -164,4 +177,91 @@ pub fn camera_runner(
 			}
 		}
 	}
+}
+
+pub fn start_mp4_h264_writer(
+	frame: Arc<RwLock<Buffer>>,
+	shutdown: Arc<AtomicBool>,
+	rx: Receiver<()>,
+) -> JoinHandle<()> {
+	std::thread::spawn(move || mp4_h264_writer(frame, shutdown, rx))
+}
+
+pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
+	// https://github.com/alfg/mp4-rust/blob/master/examples/mp4writer.rs
+	let config = Mp4Config {
+		major_brand: "isom".parse().unwrap(),
+		minor_version: 512,
+		compatible_brands: vec![
+			str::parse("isom").unwrap(),
+			str::parse("iso2").unwrap(),
+			str::parse("avc1").unwrap(),
+			str::parse("mp41").unwrap(),
+		],
+		timescale: 1000,
+	};
+
+	let file = File::create("out.mp4").unwrap();
+	let mut writer = Mp4Writer::write_start(file, &config).unwrap();
+
+	let track_config = TrackConfig {
+		track_type: mp4::TrackType::Video,
+		timescale: 1000,
+		language: String::from("en"),
+		media_conf: MediaConfig::AvcConfig(AvcConfig {
+			width: 1280,
+			height: 720,
+			seq_param_set: vec![],
+			pic_param_set: vec![],
+		}),
+	};
+
+	writer.add_track(&track_config).unwrap();
+
+	let mut encoder = None;
+	let mut ticks = 0;
+	let tps = 1000 / 30;
+
+	loop {
+		if shutdown.load(Ordering::Relaxed) {
+			break;
+		}
+
+		match rx.recv() {
+			Err(_e) => (),
+			Ok(_) => {
+				let read = frame.read().unwrap();
+
+				if let None = encoder {
+					encoder = Some((
+						Encoder::with_config(EncoderConfig::new(
+							read.width as u32,
+							read.height as u32,
+						))
+						.unwrap(),
+						YUVBuffer::new(read.width, read.height),
+					));
+				}
+
+				let mut rgb = vec![0; read.width * read.height * 3];
+				let (encoder, buffer) = encoder.as_mut().unwrap();
+				read.as_rgb_bytes(&mut rgb);
+				buffer.read_rgb(&rgb);
+				let stream = encoder.encode(buffer).unwrap().to_vec();
+
+				let sample = Mp4Sample {
+					start_time: ticks,
+					duration: tps,
+					rendering_offset: 0,
+					is_sync: false,
+					bytes: Bytes::from(stream),
+				};
+				ticks += tps as u64;
+
+				writer.write_sample(0, &sample).unwrap();
+			}
+		}
+	}
+
+	writer.write_end().unwrap();
 }

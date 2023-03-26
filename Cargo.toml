@@ -7,8 +7,11 @@ edition = "2021"
 
 [dependencies]
 # Fluff is just a thing I little abstraction I was using in gaze that I like
-fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
+#fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
+fluffy = {  path = "../gaze/fluffy" }
 neam = { git = "https://github.com/gennyble/neam" }
+openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
+mp4 = "0.13.0"
 
 [dependencies.nokhwa]
 version = "0.10.0"
