@@ -1,0 +1,16 @@
+[package]
+name = "trichrideo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Fluff is just a thing I little abstraction I was using in gaze that I like
+fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
+neam = { git = "https://github.com/gennyble/neam" }
+
+[dependencies.nokhwa]
+version = "0.10.0"
+# Use the native input backends, enable WGPU integration
+features = ["input-native"]

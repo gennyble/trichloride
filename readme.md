@@ -1,0 +1,1 @@
+trichrome video because what [dslr-trichrome](https://github.com/eclecticnybles/gaze/tree/main/dslr-trichrome) gives me is fantastic.
