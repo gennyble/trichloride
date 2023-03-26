@@ -104,6 +104,8 @@ pub fn start_camera(proxy: EventLoopProxy<()>, shutdown: Arc<AtomicBool>) -> Cam
 	}
 }
 
+pub const COLOUR: bool = true;
+
 pub fn camera_runner(
 	proxy: EventLoopProxy<()>,
 	shutdown: Arc<AtomicBool>,
@@ -124,6 +126,9 @@ pub fn camera_runner(
 			.resize(width as usize, height as usize);
 	}
 
+	// 0 Red, 1 Green, 2 Blue.
+	let mut rgb_idx = 0;
+
 	println!("Opening stream...");
 	camera.open_stream().unwrap();
 	println!("Opened! Entering loop");
@@ -141,10 +146,19 @@ pub fn camera_runner(
 					let mut buff = frame.write().unwrap();
 
 					for (idx, px) in buff.data.iter_mut().enumerate() {
-						let new = rgb[idx * 3];
-						*px = (*px >> 8) | ((new as u32) << 16);
+						if COLOUR {
+							let channel = rgb[idx * 3 + rgb_idx];
+							let mut bytes = px.to_be_bytes();
+							bytes[1 + rgb_idx] = channel;
+							*px = u32::from_be_bytes(bytes);
+						} else {
+							let new = rgb[idx * 3];
+							*px = (*px >> 8) | ((new as u32) << 16);
+						}
 					}
 				}
+
+				rgb_idx = (rgb_idx + 1) % 3;
 
 				proxy.send_event(()).unwrap();
 			}
