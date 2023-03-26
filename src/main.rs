@@ -188,6 +188,100 @@ pub fn start_mp4_h264_writer(
 }
 
 pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
+	let mut h264 = Outh264::new();
+
+	loop {
+		if shutdown.load(Ordering::Relaxed) {
+			break;
+		}
+
+		match rx.recv() {
+			Err(_e) => (),
+			Ok(_) => {
+				let read = frame.read().unwrap();
+				h264.frame(&read);
+			}
+		}
+	}
+}
+
+struct Maybeh264 {
+	encoder: Encoder,
+	rgb: Vec<u8>,
+	yuvbuffer: YUVBuffer,
+}
+
+pub struct Outh264 {
+	maybe: Option<Maybeh264>,
+}
+
+impl Outh264 {
+	pub fn new() -> Self {
+		Self { maybe: None }
+	}
+
+	pub fn frame(&mut self, buffer: &Buffer) {
+		let yes = match self.maybe.as_mut() {
+			None => {
+				let encoder = Encoder::with_config(EncoderConfig::new(
+					buffer.width as u32,
+					buffer.height as u32,
+				))
+				.unwrap();
+				let yuvbuffer = YUVBuffer::new(buffer.width, buffer.height);
+				let rgb = vec![0; buffer.width * buffer.height * 3];
+
+				self.maybe = Some(Maybeh264 {
+					encoder,
+					rgb,
+					yuvbuffer,
+				});
+
+				self.maybe.as_mut().unwrap()
+			}
+			Some(yes) => yes,
+		};
+
+		buffer.as_rgb_bytes(&mut yes.rgb);
+		yes.yuvbuffer.read_rgb(&yes.rgb);
+		let nal_owned = yes.encoder.encode(&yes.yuvbuffer).unwrap().to_vec();
+		let mut nal = &nal_owned[..];
+
+		println!("Entering NAL loop");
+		loop {
+			if nal.len() == 0 {
+				break;
+			}
+
+			nal = match &nal[0..nal.len().min(4)] {
+				[0, 0, 0, 1] => {
+					println!("0001 style");
+					&nal[4..]
+				}
+				[0, 0, 1, _] => {
+					println!("001 style");
+					&nal[3..]
+				}
+				_ => {
+					nal = &nal[1..];
+					continue;
+				}
+			};
+
+			let nal_id = nal[0];
+			let nal_aid = nal_id & 0x1F;
+			println!("{nal_id} or with the bitwise and, {}", nal_id & 0x1F);
+
+			match nal_aid {
+				7 => println!("GOT SPS GENNY LOOK LOOK"),
+				9 => println!("LOOK GOT PPS PICTURE PICTURE PIUCTURE"),
+				_ => (),
+			}
+		}
+	}
+}
+
+/*pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
 	// https://github.com/alfg/mp4-rust/blob/master/examples/mp4writer.rs
 	let config = Mp4Config {
 		major_brand: "isom".parse().unwrap(),
@@ -264,4 +358,4 @@ pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx
 	}
 
 	writer.write_end().unwrap();
-}
+}*/
