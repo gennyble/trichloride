@@ -6,15 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# Fluff is just a thing I little abstraction I was using in gaze that I like
-#fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
-fluffy = {  path = "../gaze/fluffy" }
-neam = { git = "https://github.com/gennyble/neam" }
-openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
-#mp4 = "0.13.0"
-mp4 = { path = "../mp4-rust" }
+# fluffy is an abstraction over winit/softbuffer I use in things for gaze.
+# I'm used to it, so I'm grabbing it here. Just need a little preview is all
+# and opengl is hard.
+fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
 
+# nearest neighbor image upscale/downscale.
+neam = { git = "https://github.com/gennyble/neam" }
+
+# video things, oh gosh
+openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
+mp4 = "0.13.0"
+
+# webcam library I'm quite fond of. It has it's bugs, but it's overally pretty
+# nice to work with!
 [dependencies.nokhwa]
 version = "0.10.0"
-# Use the native input backends, enable WGPU integration
+# Use the native input backends
 features = ["input-native"]
