@@ -1574,7 +1574,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "trichrideo"
+name = "trichloride"
 version = "0.1.0"
 dependencies = [
  "fluffy",
