@@ -44,7 +44,11 @@ fn main() {
 
 	println!("Starting h264 output thread");
 	let (tx, rx) = channel();
-	let mut h264 = start_mp4_h264_writer(camera.shared_frame.clone(), shutdown.clone(), rx);
+	let mut h264 = Some(start_mp4_h264_writer(
+		camera.shared_frame.clone(),
+		shutdown.clone(),
+		rx,
+	));
 
 	el.run(move |event, _, flow| {
 		*flow = ControlFlow::Wait;
@@ -54,8 +58,17 @@ fn main() {
 				fluff.draw_buffer();
 			}
 			Event::LoopDestroyed => {
+				println!("Shutting down!");
 				shutdown.store(true, Ordering::Release);
+
+				// We need to unblock the h264 thread by sending once more
+				tx.send(()).unwrap();
+
+				println!("Stored shutdown");
 				camera.join();
+				println!("Joined camera");
+				h264.take().unwrap().join().unwrap();
+				println!("Done!");
 			}
 			Event::UserEvent(()) => {
 				tx.send(()).unwrap();
@@ -193,15 +206,19 @@ pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx
 
 	loop {
 		if shutdown.load(Ordering::Relaxed) {
+			println!("Doing");
 			h264.done();
+			println!("Did!");
 			break;
 		}
 
 		match rx.recv() {
 			Err(_e) => (),
 			Ok(_) => {
+				println!("before read acq");
 				let read = frame.read().unwrap();
 				h264.frame(&read);
+				println!("after frame");
 			}
 		}
 	}
@@ -217,6 +234,7 @@ pub struct Outh264 {
 	maybe: Option<Maybeh264>,
 	mp4: Option<Mp4Writer<File>>,
 	ticks: u64,
+	idk: u8,
 	nals: u8,
 	bfr: Vec<u8>,
 }
@@ -231,6 +249,7 @@ impl Outh264 {
 			maybe: None,
 			mp4: None,
 			ticks: 0,
+			idk: 0,
 			nals: 0,
 			bfr: vec![],
 		}
@@ -284,8 +303,11 @@ impl Outh264 {
 
 		let nals = Self::nal_split(&out);
 
+		println!("{:.03}s", self.ticks as f32 / Self::TIMESCALE as f32);
+
 		if nals.len() == 0 {
 			println!("No NALS. Out len {}", out.len());
+			self.idk += 1;
 			return;
 		}
 
@@ -294,10 +316,11 @@ impl Outh264 {
 			println!("NAL Type - {:?}", n.kind);
 			match n.kind {
 				NalType::Other(_) => {
-					data.extend_from_slice(&n.as_length_prefixed());
+					//data.extend_from_slice(&n.as_length_prefixed());
 				}
 				_ => (),
 			}
+			data.extend_from_slice(&n.as_length_prefixed());
 			//self.nals += 1;
 		}
 
