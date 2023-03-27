@@ -11,7 +11,8 @@ edition = "2021"
 fluffy = {  path = "../gaze/fluffy" }
 neam = { git = "https://github.com/gennyble/neam" }
 openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
-mp4 = "0.13.0"
+#mp4 = "0.13.0"
+mp4 = { path = "../mp4-rust" }
 
 [dependencies.nokhwa]
 version = "0.10.0"

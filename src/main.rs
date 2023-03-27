@@ -2,6 +2,7 @@ mod nv12scary;
 
 use std::{
 	fs::File,
+	io::Write,
 	sync::{
 		atomic::{AtomicBool, Ordering},
 		mpsc::{channel, Receiver},
@@ -216,17 +217,22 @@ pub struct Outh264 {
 	maybe: Option<Maybeh264>,
 	mp4: Option<Mp4Writer<File>>,
 	ticks: u64,
+	nals: u8,
+	bfr: Vec<u8>,
 }
 
 impl Outh264 {
+	const TIMESCALE: u64 = 15360;
 	/// 30fps
-	const TPS: u32 = 1000 / 30;
+	const TPS: u32 = Self::TIMESCALE as u32 / 30;
 
 	pub fn new() -> Self {
 		Self {
 			maybe: None,
 			mp4: None,
 			ticks: 0,
+			nals: 0,
+			bfr: vec![],
 		}
 	}
 
@@ -261,37 +267,61 @@ impl Outh264 {
 				// We need to make it, oh no
 				// Find the SPS and Pps
 				let nals = Self::nal_split(&out);
-				let sps = nals
-					.iter()
-					.find(|nal| nal.kind == NalType::Sps)
-					.unwrap()
-					.as_full_unit();
-				let pps = nals
-					.iter()
-					.find(|nal| nal.kind == NalType::Pps)
-					.unwrap()
-					.as_full_unit();
-				let writer = Self::make_mp4(sps.as_slice(), pps.as_slice());
+				let sps = nals.iter().find(|nal| nal.kind == NalType::Sps).unwrap(); //.as_full_unit();
+
+				//println!("SPS: {sps:?}");
+
+				let pps = nals.iter().find(|nal| nal.kind == NalType::Pps).unwrap(); //.as_full_unit();
+
+				//println!("PPS: {sps:?}");
+
+				let writer = Self::make_mp4(&sps.as_bare(), &pps.as_bare());
 				self.mp4 = Some(writer);
 				self.mp4.as_mut().unwrap()
 			}
 			Some(mp4) => mp4,
 		};
 
+		let nals = Self::nal_split(&out);
+
+		if nals.len() == 0 {
+			println!("No NALS. Out len {}", out.len());
+			return;
+		}
+
+		let mut data = vec![];
+		for n in nals {
+			println!("NAL Type - {:?}", n.kind);
+			match n.kind {
+				NalType::Other(_) => {
+					data.extend_from_slice(&n.as_length_prefixed());
+				}
+				_ => (),
+			}
+			//self.nals += 1;
+		}
+
+		//if self.nals > 5 {
 		let sample = Mp4Sample {
 			start_time: self.ticks,
 			duration: Self::TPS,
 			rendering_offset: 0,
 			is_sync: false,
-			bytes: Bytes::from(out),
+			bytes: Bytes::from(data), //bytes: Bytes::from(self.bfr.drain(..).collect::<Vec<u8>>()),
 		};
+		self.nals = 0;
 		self.ticks += Self::TPS as u64;
+		println!("Wrote sample!");
 
 		writer.write_sample(1, &sample).unwrap();
+		//}
 	}
 
 	pub fn done(&mut self) {
-		self.mp4.as_mut().unwrap().write_end().unwrap();
+		if let Some(mut mp4) = self.mp4.take() {
+			mp4.write_end().unwrap();
+			mp4.into_writer().flush().unwrap();
+		}
 	}
 
 	// We need to find the Sequence Parameter Set and Picture Parameter Set
@@ -302,7 +332,7 @@ impl Outh264 {
 
 		let mut ret = vec![];
 		loop {
-			println!("{}", nal.len());
+			//println!("{}", nal.len());
 			if nal.len() == 0 {
 				break;
 			}
@@ -343,6 +373,7 @@ impl Outh264 {
 						ret.push(Nal {
 							lead_type,
 							kind,
+							raw_nal_kind: nal_id,
 							data: &nal[..len],
 						});
 						nal = &nal[len..];
@@ -353,6 +384,7 @@ impl Outh264 {
 						ret.push(Nal {
 							lead_type,
 							kind,
+							raw_nal_kind: nal_id,
 							data: &nal[..],
 						});
 						nal = &[];
@@ -377,7 +409,7 @@ impl Outh264 {
 				str::parse("avc1").unwrap(),
 				str::parse("mp41").unwrap(),
 			],
-			timescale: 1000,
+			timescale: Self::TIMESCALE as u32,
 		};
 
 		let file = File::create("out.mp4").unwrap();
@@ -385,8 +417,8 @@ impl Outh264 {
 
 		let track_config = TrackConfig {
 			track_type: mp4::TrackType::Video,
-			timescale: 1000,
-			language: String::from("en"),
+			timescale: Self::TIMESCALE as u32,
+			language: String::from("und"),
 			media_conf: MediaConfig::AvcConfig(AvcConfig {
 				width: 1280,
 				height: 720,
@@ -394,6 +426,8 @@ impl Outh264 {
 				pic_param_set: pps.to_vec(),
 			}),
 		};
+
+		println!("{sps:?}\n{pps:?}");
 
 		writer.add_track(&track_config).unwrap();
 
@@ -404,6 +438,7 @@ impl Outh264 {
 struct Nal<'a> {
 	lead_type: LeadType,
 	kind: NalType,
+	raw_nal_kind: u8,
 	data: &'a [u8],
 }
 
@@ -416,13 +451,22 @@ impl<'a> Nal<'a> {
 			LeadType::Null3 => ret.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]),
 		}
 
-		let id = match self.kind {
-			NalType::Sps => 7,
-			NalType::Pps => 8,
-			NalType::Other(o) => o,
-		} | 0b1100_0000;
+		ret.push(self.raw_nal_kind);
+		ret.extend_from_slice(self.data);
+		ret
+	}
 
-		ret.push(id);
+	pub fn as_length_prefixed(&self) -> Vec<u8> {
+		let mut ret = vec![];
+		ret.extend_from_slice(&(self.data.len() as u32 + 1).to_be_bytes());
+		ret.push(self.raw_nal_kind);
+		ret.extend_from_slice(self.data);
+		ret
+	}
+
+	pub fn as_bare(&self) -> Vec<u8> {
+		let mut ret = vec![];
+		ret.push(self.raw_nal_kind);
 		ret.extend_from_slice(self.data);
 		ret
 	}
@@ -439,82 +483,3 @@ enum NalType {
 	Sps,
 	Pps,
 }
-
-/*pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
-	// https://github.com/alfg/mp4-rust/blob/master/examples/mp4writer.rs
-	let config = Mp4Config {
-		major_brand: "isom".parse().unwrap(),
-		minor_version: 512,
-		compatible_brands: vec![
-			str::parse("isom").unwrap(),
-			str::parse("iso2").unwrap(),
-			str::parse("avc1").unwrap(),
-			str::parse("mp41").unwrap(),
-		],
-		timescale: 1000,
-	};
-
-	let file = File::create("out.mp4").unwrap();
-	let mut writer = Mp4Writer::write_start(file, &config).unwrap();
-
-	let track_config = TrackConfig {
-		track_type: mp4::TrackType::Video,
-		timescale: 1000,
-		language: String::from("en"),
-		media_conf: MediaConfig::AvcConfig(AvcConfig {
-			width: 1280,
-			height: 720,
-			seq_param_set: vec![],
-			pic_param_set: vec![],
-		}),
-	};
-
-	writer.add_track(&track_config).unwrap();
-
-	let mut encoder = None;
-	let mut ticks = 0;
-	let tps = 1000 / 30;
-
-	loop {
-		if shutdown.load(Ordering::Relaxed) {
-			break;
-		}
-
-		match rx.recv() {
-			Err(_e) => (),
-			Ok(_) => {
-				let read = frame.read().unwrap();
-
-				if let None = encoder {
-					encoder = Some((
-						Encoder::with_config(EncoderConfig::new(
-							read.width as u32,
-							read.height as u32,
-						))
-						.unwrap(),
-						YUVBuffer::new(read.width, read.height),
-					));
-				}
-
-				let mut rgb = vec![0; read.width * read.height * 3];
-				let (encoder, buffer) = encoder.as_mut().unwrap();
-				read.as_rgb_bytes(&mut rgb);
-				buffer.read_rgb(&rgb);
-				let stream = encoder.encode(buffer).unwrap().to_vec();
-
-				let sample = Mp4Sample {
-					start_time: ticks,
-					duration: tps,
-					rendering_offset: 0,
-					is_sync: false,
-					bytes: Bytes::from(stream),
-				};
-				ticks += tps as u64;
-
-				writer.write_sample(0, &sample).unwrap();
-			}
-		}
-	}
-
-	writer.write_end().unwrap();
-}*/
