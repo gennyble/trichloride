@@ -29,7 +29,7 @@ use openh264::{
 
 fn main() {
 	let wbuilder = WindowBuilder::new()
-		.with_title("trichrideo")
+		.with_title("trichlroide")
 		.with_inner_size(PhysicalSize::new(640, 360));
 
 	let mut fluff = FluffyWindow::build_window(wbuilder);
