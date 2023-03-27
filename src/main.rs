@@ -179,7 +179,9 @@ pub fn camera_runner(
 							bytes[1 + rgb_idx] = channel;
 							*px = u32::from_be_bytes(bytes);
 						} else {
-							let new = rgb[idx * 3];
+							let new = ((rgb[idx * 3] as u32
+								+ rgb[idx * 3 + 1] as u32 + rgb[idx * 3 + 2] as u32)
+								/ 3) as u8;
 							*px = (*px >> 8) | ((new as u32) << 16);
 						}
 					}
@@ -256,26 +258,22 @@ impl Outh264 {
 	}
 
 	pub fn frame(&mut self, buffer: &Buffer) {
-		let yes = match self.maybe.as_mut() {
-			None => {
-				let encoder = Encoder::with_config(EncoderConfig::new(
-					buffer.width as u32,
-					buffer.height as u32,
-				))
-				.unwrap();
-				let yuvbuffer = YUVBuffer::new(buffer.width, buffer.height);
-				let rgb = vec![0; buffer.width * buffer.height * 3];
+		let width = buffer.width;
+		let height = buffer.height;
+		let initialize_encoder = || {
+			let encoder =
+				Encoder::with_config(EncoderConfig::new(width as u32, height as u32)).unwrap();
+			let yuvbuffer = YUVBuffer::new(buffer.width, buffer.height);
+			let rgb = vec![0; buffer.width * buffer.height * 3];
 
-				self.maybe = Some(Maybeh264 {
-					encoder,
-					rgb,
-					yuvbuffer,
-				});
-
-				self.maybe.as_mut().unwrap()
+			Maybeh264 {
+				encoder,
+				rgb,
+				yuvbuffer,
 			}
-			Some(yes) => yes,
 		};
+
+		let yes = self.maybe.get_or_insert_with(initialize_encoder);
 
 		buffer.as_rgb_bytes(&mut yes.rgb);
 		yes.yuvbuffer.read_rgb(&yes.rgb);
