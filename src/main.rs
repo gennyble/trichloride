@@ -314,11 +314,14 @@ impl Outh264 {
 			println!("NAL Type - {:?}", n.kind);
 			match n.kind {
 				NalType::Other(_) => {
-					//data.extend_from_slice(&n.as_length_prefixed());
+					data.extend_from_slice(&n.as_length_prefixed());
+				}
+				NalType::Pps => {
+					data.extend_from_slice(&n.as_length_prefixed());
 				}
 				_ => (),
 			}
-			data.extend_from_slice(&n.as_length_prefixed());
+			//data.extend_from_slice(&n.as_length_prefixed());
 			//self.nals += 1;
 		}
 
@@ -430,7 +433,7 @@ impl Outh264 {
 				str::parse("avc1").unwrap(),
 				str::parse("mp41").unwrap(),
 			],
-			timescale: Self::TIMESCALE as u32,
+			timescale: 1000,
 		};
 
 		let file = File::create("out.mp4").unwrap();
