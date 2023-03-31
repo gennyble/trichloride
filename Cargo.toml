@@ -18,6 +18,8 @@ neam = { git = "https://github.com/gennyble/neam" }
 openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
 mp4 = "0.13.0"
 
+devout = { path = "devout" }
+
 # webcam library I'm quite fond of. It has it's bugs, but it's overally pretty
 # nice to work with!
 [dependencies.nokhwa]

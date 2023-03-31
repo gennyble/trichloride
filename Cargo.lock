@@ -404,6 +404,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "devout"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "mp4",
+ "openh264",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1580,6 +1589,7 @@ dependencies = [
 name = "trichloride"
 version = "0.1.0"
 dependencies = [
+ "devout",
  "fluffy",
  "mp4",
  "neam",
