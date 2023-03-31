@@ -7,6 +7,8 @@ use openh264::{
 	formats::{YUVBuffer, YUVSource},
 };
 
+//TODO: gen- Do we want to mp4.done() on drop???
+
 struct WriterWrapper<W: Write + Seek> {
 	writer: Option<W>,
 	mp4_writer: Option<Mp4Writer<W>>,
@@ -100,6 +102,12 @@ impl<W: Write + Seek> Devout<W> {
 			rgb,
 			yuvbuffer,
 		}
+	}
+
+	/// To be called when you're done writing data. Writes the last of the MP4.
+	pub fn done(self) {
+		let mut mp4 = self.writer.mp4_writer.unwrap();
+		mp4.write_end().unwrap();
 	}
 
 	/// Take a frame, as 24bit RGB, and push it through into the video. If

@@ -11,6 +11,7 @@ use std::{
 	thread::JoinHandle,
 };
 
+use devout::{Devout, Framerate};
 use fluffy::{
 	event::Event,
 	event_loop::{ControlFlow, EventLoopProxy},
@@ -204,14 +205,16 @@ pub fn start_mp4_h264_writer(
 }
 
 pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
-	let mut h264 = Outh264::new();
+	let file = File::create("out.mp4").unwrap();
+	let mut h264 = Devout::new(file, Framerate::Thirty);
+	let mut rgb: Vec<u8> = vec![];
 
 	loop {
 		if shutdown.load(Ordering::Relaxed) {
 			println!("Doing");
 			h264.done();
 			println!("Did!");
-			break;
+			return;
 		}
 
 		match rx.recv() {
@@ -219,14 +222,22 @@ pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx
 			Ok(_) => {
 				println!("before read acq");
 				let read = frame.read().unwrap();
-				h264.frame(&read);
+
+				let frame_size = read.width * read.height * 3;
+				if rgb.len() < frame_size {
+					rgb.resize(frame_size, 0);
+				}
+
+				read.as_rgb_bytes(&mut rgb);
+
+				h264.frame(read.width as u32, read.height as u32, &rgb);
 				println!("after frame");
 			}
 		}
 	}
 }
 
-struct Maybeh264 {
+/*struct Maybeh264 {
 	encoder: Encoder,
 	rgb: Vec<u8>,
 	yuvbuffer: YUVBuffer,
@@ -507,3 +518,4 @@ enum NalType {
 	Sps,
 	Pps,
 }
+*/
