@@ -51,7 +51,6 @@ pub struct Devout<W: Write + Seek> {
 /// The things we need to encode H264.
 struct Maybeh264 {
 	encoder: Encoder,
-	rgb: Vec<u8>,
 	yuvbuffer: YUVBuffer,
 }
 
@@ -95,13 +94,8 @@ impl<W: Write + Seek> Devout<W> {
 		let encoder =
 			Encoder::with_config(EncoderConfig::new(width as u32, height as u32)).unwrap();
 		let yuvbuffer = YUVBuffer::new(width as usize, height as usize);
-		let rgb = vec![0; width as usize * height as usize * 3];
 
-		Maybeh264 {
-			encoder,
-			rgb,
-			yuvbuffer,
-		}
+		Maybeh264 { encoder, yuvbuffer }
 	}
 
 	/// To be called when you're done writing data. Writes the last of the MP4.

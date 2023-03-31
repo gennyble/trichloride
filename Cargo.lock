@@ -1591,10 +1591,8 @@ version = "0.1.0"
 dependencies = [
  "devout",
  "fluffy",
- "mp4",
  "neam",
  "nokhwa",
- "openh264",
 ]
 
 [[package]]

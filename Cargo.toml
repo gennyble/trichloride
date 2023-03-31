@@ -10,14 +10,9 @@ edition = "2021"
 # I'm used to it, so I'm grabbing it here. Just need a little preview is all
 # and opengl is hard.
 fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
-
 # nearest neighbor image upscale/downscale.
 neam = { git = "https://github.com/gennyble/neam" }
-
-# video things, oh gosh
-openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
-mp4 = "0.13.0"
-
+# video crate :D
 devout = { path = "devout" }
 
 # webcam library I'm quite fond of. It has it's bugs, but it's overally pretty
