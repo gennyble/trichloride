@@ -366,7 +366,7 @@ impl<'a> YUVSource for YUV420Wrapper<'a> {
 
 	fn v(&self) -> &[u8] {
 		let base_u = self.width * self.height;
-		let base_v = base_u * base_u / 4;
+		let base_v = base_u + base_u / 4;
 		&self.bytes[base_v..]
 	}
 
