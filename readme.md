@@ -13,3 +13,6 @@ convenient crate for outputting MP4s with H264 encoded video. It tries to keep a
 A thing for testing how fast `devout` can do things. Creates test video.
 
 Named after the Aisle at my local Michaels that has all the picture frames.
+
+### `vex`
+Video Effects.
