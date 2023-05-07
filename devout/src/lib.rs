@@ -7,7 +7,10 @@ use openh264::{
 	formats::{YUVBuffer, YUVSource},
 };
 
-//TODO: gen- Do we want to mp4.done() on drop???
+//gen- Do we want to mp4.done() on drop???
+//gen- Yes, yes we do.
+//TODO: Can it panic?
+// Add docs saying to use `done` if you want to catch the error
 
 struct WriterWrapper<W: Write + Seek> {
 	writer: Option<W>,
@@ -38,7 +41,26 @@ impl<W: Write + Seek> WriterWrapper<W> {
 			self.mp4_writer.get_or_insert_with(init)
 		}
 	}
+
+	//TODO: gen- Do better
+	fn done(mut self) -> Result<(), mp4::Error> {
+		if let Some(mut writer) = self.mp4_writer.take() {
+			writer.write_end()
+		} else {
+			Ok(())
+		}
+	}
 }
+
+/*
+impl<W: Write + Seek> Drop for WriterWrapper<W> {
+	fn drop(&mut self) {
+		if let Some(ref mut writer) = self.mp4_writer {
+			writer.write_end().unwrap()
+		}
+	}
+}
+*/
 
 pub struct Devout<W: Write + Seek> {
 	framerate: Framerate,
@@ -248,10 +270,10 @@ impl<W: Write + Seek> Devout<W> {
 				let length = nal_data.len() as u32;
 
 				// We don't want/need to write out Sequence Parameter Sets
-				if nal_data[0] & 0x1F != 7 {
-					buffer.extend_from_slice(&length.to_be_bytes());
-					buffer.extend_from_slice(nal_data);
-				}
+				//if nal_data[0] & 0x1F != 7 {
+				buffer.extend_from_slice(&length.to_be_bytes());
+				buffer.extend_from_slice(nal_data);
+				//}
 			}
 		}
 

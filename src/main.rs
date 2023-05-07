@@ -8,6 +8,7 @@ use std::{
 		Arc, RwLock,
 	},
 	thread::JoinHandle,
+	time::{Duration, Instant},
 };
 
 use devout::{Devout, Framerate};
@@ -25,7 +26,7 @@ use nokhwa::{
 fn main() {
 	let wbuilder = WindowBuilder::new()
 		.with_title("trichlroide")
-		.with_inner_size(PhysicalSize::new(640, 360));
+		.with_inner_size(PhysicalSize::new(1280, 720));
 
 	let mut fluff = FluffyWindow::build_window(wbuilder);
 
@@ -126,7 +127,8 @@ pub fn start_camera(proxy: EventLoopProxy<()>, shutdown: Arc<AtomicBool>) -> Cam
 	}
 }
 
-pub const COLOUR: bool = true;
+pub const COLOUR: bool = false;
+pub const FRAMERATE: u32 = 30;
 
 pub fn camera_runner(
 	proxy: EventLoopProxy<()>,
@@ -151,7 +153,9 @@ pub fn camera_runner(
 	// 0 Red, 1 Green, 2 Blue.
 	let mut rgb_idx = 0;
 
-	println!("Opening stream...");
+	//TODO: use error to collect difference from last to expected MS
+	let mut last = Instant::now();
+	let mut error = println!("Opening stream...");
 	camera.open_stream().unwrap();
 	println!("Opened! Entering loop");
 	loop {
@@ -162,6 +166,13 @@ pub fn camera_runner(
 		match camera.frame_raw() {
 			Err(_e) => (),
 			Ok(cow) => {
+				/*let now = Instant::now();
+				if now - last < Duration::from_millis(1000 / FRAMERATE as u64) {
+					continue;
+				}
+				println!("Took frame at {}ms", (now - last).as_millis());
+				last = now;*/
+
 				nv12scary::yuv422_rgb(&cow, &mut rgb, width as usize);
 
 				{
@@ -200,7 +211,7 @@ pub fn start_mp4_h264_writer(
 
 pub fn mp4_h264_writer(frame: Arc<RwLock<Buffer>>, shutdown: Arc<AtomicBool>, rx: Receiver<()>) {
 	let file = File::create("out.mp4").unwrap();
-	let mut h264 = Devout::new(file, Framerate::Thirty);
+	let mut h264 = Devout::new(file, Framerate::Whole(FRAMERATE));
 	let mut rgb: Vec<u8> = vec![];
 
 	loop {
