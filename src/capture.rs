@@ -248,20 +248,28 @@ fn camera_runner(
 			match *effect_type {
 				Effect::Normal => effect = None,
 				Effect::TricrideoGrey => {
-					let frame = effect.as_mut().map(|v| v.frame_out().to_owned());
-					if let Some(frame) = frame {
-						effect = Some(Box::new(Tricrideo::from_frame(frame)));
-					} else {
-						effect = Some(Box::new(Tricrideo::new(width as usize, height as usize)));
-					}
+					let frame = effect
+						.as_mut()
+						.map(|v| v.frame_out().to_owned())
+						.unwrap_or_else(|| Frame {
+							data: rgb.clone(),
+							width: width as usize,
+							height: height as usize,
+						});
+
+					effect = Some(Box::new(Tricrideo::from_frame(frame)));
 				}
 				Effect::TricrideoColour => {
-					let frame = effect.as_mut().map(|v| v.frame_out().to_owned());
-					let mut tri = if let Some(frame) = frame {
-						Tricrideo::from_frame(frame)
-					} else {
-						Tricrideo::new(width as usize, height as usize)
-					};
+					let frame = effect
+						.as_mut()
+						.map(|v| v.frame_out().to_owned())
+						.unwrap_or_else(|| Frame {
+							data: rgb.clone(),
+							width: width as usize,
+							height: height as usize,
+						});
+
+					let mut tri = Tricrideo::from_frame(frame);
 					tri.set_coloured(true);
 					effect = Some(Box::new(tri));
 				}
