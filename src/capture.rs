@@ -195,7 +195,11 @@ fn camera_runner(
 		RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestResolution);
 	let mut camera = Camera::new(CameraIndex::Index(0), requested_format).unwrap();
 
-	println!("Got camera!");
+	println!(
+		"Got camera: {} {}",
+		camera.index(),
+		camera.info().human_name()
+	);
 
 	let width = camera.camera_format().width();
 	let height = camera.camera_format().height();
@@ -268,6 +272,10 @@ fn camera_runner(
 			Err(_e) => (),
 			Ok(cow) => {
 				crate::nv12scary::yuv422_rgb(&cow, &mut rgb, width as usize);
+				//let buffer = cow.decode_image::<RgbFormat>().unwrap();
+				//println!("width = {} | height = {}", buffer.width(), buffer.height());
+				//let buff = buffer.into_raw();
+				//rgb.copy_from_slice(&buff);
 
 				{
 					let mut lock = frame.write().unwrap();

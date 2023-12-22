@@ -10,12 +10,9 @@ As well as trichloride, the tri-chrome video thing, a few other projects live he
 convenient crate for outputting MP4s with H264 encoded video. It aims to have a
 simple API to make it as easy as possible to output video.
 
-Currently encodes with OpenH264
+Currently encodes with OpenH264, but wants to eventaully use x264.
 
 ### `aisle51`
 A thing for testing how fast `devout` can do things. Creates test video.
 
 Named after the Aisle at my local Michaels that has all the picture frames.
-
-### `vex`
-Video Effects.
