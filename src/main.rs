@@ -1,6 +1,6 @@
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
-use capture::CameraThread;
+use capture::{CameraEvent, CameraThread, Effect};
 use eframe::{
 	egui::{self, CentralPanel, TextureOptions, ViewportBuilder},
 	epaint::{Color32, ColorImage, TextureHandle, Vec2},
@@ -8,6 +8,7 @@ use eframe::{
 
 mod capture;
 mod nv12scary;
+mod vex;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
@@ -25,19 +26,24 @@ enum Cl3Events {
 struct App {
 	rx: Receiver<Cl3Events>,
 	preview: Option<TextureHandle>,
+	effect: Effect,
 
 	camera_thread: CameraThread,
+	camera_sender: Sender<CameraEvent>,
 }
 
 impl App {
 	fn new() -> Self {
 		let (tx, rx) = channel();
+		let camera = CameraThread::new(tx);
 
 		Self {
 			rx,
 			preview: None,
+			effect: Effect::Normal,
 
-			camera_thread: CameraThread::new(tx),
+			camera_sender: camera.camera_tx(),
+			camera_thread: camera,
 		}
 	}
 
@@ -129,6 +135,33 @@ impl eframe::App for App {
 						}
 					} else if ui.button("Start recording").clicked() {
 						self.start_recording(ctx);
+					}
+
+					let mut selected_effect = self.effect;
+					egui::ComboBox::from_id_source(selected_effect)
+						.selected_text(selected_effect.to_string())
+						.show_ui(ui, |ui| {
+							ui.selectable_value(
+								&mut selected_effect,
+								Effect::Normal,
+								Effect::Normal.to_string(),
+							);
+							ui.selectable_value(
+								&mut selected_effect,
+								Effect::TricrideoGrey,
+								Effect::TricrideoGrey.to_string(),
+							);
+							ui.selectable_value(
+								&mut selected_effect,
+								Effect::TricrideoColour,
+								Effect::TricrideoColour.to_string(),
+							)
+						});
+
+					if selected_effect != self.effect {
+						self.effect = selected_effect;
+						self.camera_sender
+							.send(CameraEvent::ChangeEffect(selected_effect));
 					}
 				});
 			});
