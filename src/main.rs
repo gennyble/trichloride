@@ -1,4 +1,4 @@
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 use capture::CameraThread;
 use eframe::{
@@ -8,7 +8,6 @@ use eframe::{
 
 mod capture;
 mod nv12scary;
-mod videographer;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
@@ -21,16 +20,6 @@ fn main() -> Result<(), eframe::Error> {
 
 enum Cl3Events {
 	FrameReceive,
-}
-
-enum MuxerEvents {
-	FrameReceive,
-	Shutdown,
-}
-
-struct Recorder {
-	tx: Sender<()>,
-	rx: Receiver<()>,
 }
 
 struct App {

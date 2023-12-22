@@ -6,7 +6,6 @@ use std::{
 		Arc, RwLock, RwLockReadGuard,
 	},
 	thread::JoinHandle,
-	time::{Duration, Instant},
 };
 
 use devout::{Devout, Framerate};
@@ -17,7 +16,7 @@ use nokhwa::{
 	Camera,
 };
 
-use crate::{Cl3Events, MuxerEvents};
+use crate::Cl3Events;
 
 pub struct Frame {
 	pub data: Vec<u8>,
@@ -26,16 +25,16 @@ pub struct Frame {
 }
 
 pub struct CameraThread {
-	pub gui_tx: Sender<Cl3Events>,
-	pub camera_shutdown: Arc<AtomicBool>,
+	gui_tx: Sender<Cl3Events>,
+	camera_shutdown: Arc<AtomicBool>,
 
-	pub shared_frame: Arc<RwLock<Frame>>,
-	pub recording: Arc<AtomicBool>,
-	pub camera: Option<JoinHandle<()>>,
+	shared_frame: Arc<RwLock<Frame>>,
+	recording: Arc<AtomicBool>,
+	camera: Option<JoinHandle<()>>,
 
-	pub muxer: Option<JoinHandle<Receiver<MuxerEvents>>>,
-	pub muxer_tx: Sender<MuxerEvents>,
-	pub muxer_rx: Option<Receiver<MuxerEvents>>,
+	muxer: Option<JoinHandle<Receiver<MuxerEvents>>>,
+	muxer_tx: Sender<MuxerEvents>,
+	muxer_rx: Option<Receiver<MuxerEvents>>,
 }
 
 impl CameraThread {
@@ -133,10 +132,9 @@ impl CameraThread {
 	}
 }
 
-pub const COLOUR: bool = true;
 pub const FRAMERATE: u32 = 30;
 
-pub fn camera_runner(
+fn camera_runner(
 	ctx: egui::Context,
 	tx: Sender<Cl3Events>,
 	shutdown: Arc<AtomicBool>,
@@ -213,10 +211,12 @@ pub fn camera_runner(
 	}
 }
 
-pub fn mp4_h264_writer(
-	frame: Arc<RwLock<Frame>>,
-	rx: Receiver<MuxerEvents>,
-) -> Receiver<MuxerEvents> {
+enum MuxerEvents {
+	FrameReceive,
+	Shutdown,
+}
+
+fn mp4_h264_writer(frame: Arc<RwLock<Frame>>, rx: Receiver<MuxerEvents>) -> Receiver<MuxerEvents> {
 	let file = File::create("out.mp4").unwrap();
 	let mut h264 = Devout::new(file, Framerate::Whole(FRAMERATE));
 
