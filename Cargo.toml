@@ -21,4 +21,4 @@ version = "0.10.0"
 features = ["input-native"]
 
 [workspace]
-members = ["devout", "vex"]
+members = ["devout"]

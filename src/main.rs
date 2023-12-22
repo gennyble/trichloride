@@ -110,25 +110,27 @@ impl eframe::App for App {
 			ui.vertical(|ui| {
 				self.display_preview(ui);
 
-				if self.camera_thread.running() {
-					let button = egui::Button::new("Stop preview...");
+				ui.horizontal(|ui| {
+					if self.camera_thread.running() {
+						let button = egui::Button::new("Stop preview...");
+
+						if self.camera_thread.recording() {
+							ui.add_enabled(false, button);
+						} else if ui.add(button).clicked() {
+							self.stop_preview();
+						}
+					} else if ui.button("Start Preview").clicked() {
+						self.start_preview(ctx);
+					}
 
 					if self.camera_thread.recording() {
-						ui.add_enabled(false, button);
-					} else if ui.add(button).clicked() {
-						self.stop_preview();
+						if ui.button("Stop recording...").clicked() {
+							self.stop_recording();
+						}
+					} else if ui.button("Start recording").clicked() {
+						self.start_recording(ctx);
 					}
-				} else if ui.button("Start Preview").clicked() {
-					self.start_preview(ctx);
-				}
-
-				if self.camera_thread.recording() {
-					if ui.button("Stop recording...").clicked() {
-						self.stop_recording();
-					}
-				} else if ui.button("Start recording").clicked() {
-					self.start_recording(ctx);
-				}
+				});
 			});
 		});
 	}
