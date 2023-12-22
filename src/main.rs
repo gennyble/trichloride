@@ -167,4 +167,10 @@ impl eframe::App for App {
 			});
 		});
 	}
+
+	fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+		if self.camera_thread.running() {
+			self.camera_thread.stop();
+		}
+	}
 }
