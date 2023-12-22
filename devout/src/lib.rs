@@ -7,14 +7,10 @@ use openh264::{
 	formats::{YUVBuffer, YUVSource},
 };
 
-//gen- Do we want to mp4.done() on drop???
-//gen- Yes, yes we do.
-//TODO: Can it panic?
-// Add docs saying to use `done` if you want to catch the error
-
 struct WriterWrapper<W: Write + Seek> {
 	writer: Option<W>,
 	mp4_writer: Option<Mp4Writer<W>>,
+	finalize_on_drop: bool,
 }
 
 impl<W: Write + Seek> WriterWrapper<W> {
@@ -22,6 +18,7 @@ impl<W: Write + Seek> WriterWrapper<W> {
 		Self {
 			writer: Some(writer),
 			mp4_writer: None,
+			finalize_on_drop: true,
 		}
 	}
 
@@ -42,6 +39,12 @@ impl<W: Write + Seek> WriterWrapper<W> {
 		}
 	}
 
+	/// Whether or not we should call `done` on drop. Failure to call done
+	/// will result in a corrupt MP4.
+	pub fn finalize_on_drop(&mut self, finalize_flag: bool) {
+		self.finalize_on_drop = finalize_flag;
+	}
+
 	//TODO: gen- Do better
 	fn done(mut self) -> Result<(), mp4::Error> {
 		if let Some(mut writer) = self.mp4_writer.take() {
@@ -52,15 +55,17 @@ impl<W: Write + Seek> WriterWrapper<W> {
 	}
 }
 
-/*
 impl<W: Write + Seek> Drop for WriterWrapper<W> {
 	fn drop(&mut self) {
+		if !self.finalize_on_drop {
+			return;
+		}
+
 		if let Some(ref mut writer) = self.mp4_writer {
 			writer.write_end().unwrap()
 		}
 	}
 }
-*/
 
 pub struct Devout<W: Write + Seek> {
 	framerate: Framerate,
@@ -94,7 +99,7 @@ impl<W: Write + Seek> Devout<W> {
 	/// Get a new ['Devout'] and create the internal H264 encoder at the same
 	/// time.
 	///
-	/// Note, we still create the MP4 writer upoin receiving the first
+	/// Note, we still create the MP4 writer upon receiving the first
 	/// frame as there is information we can only gather after feeding OpenH264
 	/// at least one frame.
 	pub fn new_with_dimensions<R: Into<Framerate>>(
@@ -113,16 +118,20 @@ impl<W: Write + Seek> Devout<W> {
 	}
 
 	fn init_encoder(width: u32, height: u32) -> Maybeh264 {
-		let encoder =
-			Encoder::with_config(EncoderConfig::new(width as u32, height as u32)).unwrap();
+		let encoder = Encoder::with_config(
+			EncoderConfig::new(width as u32, height as u32).set_bitrate_bps(22_000_000),
+		)
+		.unwrap();
 		let yuvbuffer = YUVBuffer::new(width as usize, height as usize);
 
 		Maybeh264 { encoder, yuvbuffer }
 	}
 
 	/// To be called when you're done writing data. Writes the last of the MP4.
-	pub fn done(self) {
-		let mut mp4 = self.writer.mp4_writer.unwrap();
+	///
+	/// Failing to call this method will create a corrupt MP4.
+	pub fn done(mut self) {
+		let mut mp4 = self.writer.mp4_writer.take().unwrap();
 		mp4.write_end().unwrap();
 	}
 
@@ -147,6 +156,11 @@ impl<W: Write + Seek> Devout<W> {
 				bytes: data,
 			}),
 		)
+	}
+
+	pub fn frame_yuvsource<Y: YUVSource>(&mut self, source: &Y) {
+		//TODO: check width/height is correct with known width/height AND with data given
+		self.write_frame(source.width() as u32, source.height() as u32, Some(source))
 	}
 
 	fn write_frame<Y: YUVSource>(&mut self, width: u32, height: u32, yuv: Option<&Y>) {

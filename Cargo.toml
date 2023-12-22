@@ -6,10 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# fluffy is an abstraction over winit/softbuffer I use in things for gaze.
-# I'm used to it, so I'm grabbing it here. Just need a little preview is all
-# and opengl is hard.
-fluffy = {  git = "https://github.com/eclecticnybles/gaze" }
+eframe = "0.24.1"
+
 # nearest neighbor image upscale/downscale.
 neam = { git = "https://github.com/gennyble/neam" }
 # video crate :D
@@ -21,3 +19,6 @@ devout = { path = "devout" }
 version = "0.10.0"
 # Use the native input backends
 features = ["input-native"]
+
+[workspace]
+members = ["devout", "vex"]

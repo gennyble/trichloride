@@ -1,88 +1,146 @@
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+
+use capture::CameraThread;
+use eframe::{
+	egui::{self, CentralPanel, TextureOptions, ViewportBuilder},
+	epaint::{Color32, ColorImage, TextureHandle, Vec2},
+};
+
 mod capture;
-mod fluffy;
 mod nv12scary;
 mod videographer;
 
-use std::{
-	ops::DerefMut,
-	sync::{
-		atomic::{AtomicBool, Ordering},
-		mpsc::channel,
-		Arc,
-	},
-};
+fn main() -> Result<(), eframe::Error> {
+	let options = eframe::NativeOptions {
+		viewport: ViewportBuilder::default().with_inner_size((640.0, 480.0)),
+		..Default::default()
+	};
 
-use fluffy::{event::Event, event_loop::ControlFlow, FluffyWindow, PhysicalSize, WindowBuilder};
+	eframe::run_native("trichloride", options, Box::new(|_cc| Box::new(App::new())))
+}
 
-fn main() {
-	let wbuilder = WindowBuilder::new()
-		.with_title("trichlroide")
-		.with_inner_size(PhysicalSize::new(1280, 720));
+enum Cl3Events {
+	FrameReceive,
+}
 
-	let mut fluff = FluffyWindow::build_window(wbuilder);
+enum MuxerEvents {
+	FrameReceive,
+	Shutdown,
+}
 
-	let shutdown = Arc::new(AtomicBool::new(false));
+struct Recorder {
+	tx: Sender<()>,
+	rx: Receiver<()>,
+}
 
-	let el = fluff.take_el();
-	let proxy = el.create_proxy();
+struct App {
+	rx: Receiver<Cl3Events>,
+	preview: Option<TextureHandle>,
 
-	println!("Getting camera!");
-	let mut camera = capture::start_camera(proxy, shutdown.clone());
+	camera_thread: CameraThread,
+}
 
-	println!("Starting h264 output thread");
-	let (tx, rx) = channel();
-	let mut h264 = Some(videographer::start_mp4_h264_writer(
-		camera.shared_frame.clone(),
-		shutdown.clone(),
-		rx,
-	));
+impl App {
+	fn new() -> Self {
+		let (tx, rx) = channel();
 
-	el.run(move |event, elwt| {
-		elwt.set_control_flow(ControlFlow::Wait);
+		Self {
+			rx,
+			preview: None,
 
-		match event {
-			Event::LoopExiting => {
-				println!("Shutting down!");
-				shutdown.store(true, Ordering::Release);
+			camera_thread: CameraThread::new(tx),
+		}
+	}
 
-				// We need to unblock the h264 thread by sending once more
-				tx.send(()).unwrap();
+	fn display_preview(&mut self, ui: &mut egui::Ui) {
+		let tex = self.preview.get_or_insert_with(|| {
+			ui.ctx().load_texture(
+				"preview",
+				ColorImage::new([1280, 720], Color32::BLACK),
+				TextureOptions::default(),
+			)
+		});
 
-				println!("Stored shutdown");
-				camera.join();
-				println!("Joined camera");
-				h264.take().unwrap().join().unwrap();
-				println!("Done!");
-			}
-			Event::UserEvent(()) => {
-				tx.send(()).unwrap();
+		let mut avsize = ui.available_size();
+		// we only want to take up 75% of the available width
+		avsize.y *= 0.75;
+		let aspect = tex.aspect_ratio();
 
-				let mut buffer = fluff.buffer();
+		// "Width Major" - when the width is larger (aspect ratio > 1)
+		let wm_x = avsize.x;
+		let wm_y = wm_x * (1.0 / aspect);
 
-				// Frame received! Shove it in our buffer and redraw
-				let read = camera.shared_frame.read().unwrap();
-				let scaled = neam::nearest(
-					read.data.as_slice(),
-					3,
-					read.width as u32,
-					read.height as u32,
-					buffer.width as u32,
-					buffer.height as u32,
-				);
+		// "Height Major" - when the height is larger (aspect ratio < 1)
+		let hm_y = avsize.y;
+		let hm_x = hm_y * aspect;
 
-				let frame_data = buffer.data.deref_mut();
-				for (idx, pix) in scaled.chunks(3).enumerate() {
-					frame_data[idx] =
-						((pix[0] as u32) << 16) | ((pix[1] as u32) << 8) | (pix[2] as u32);
+		let tsize = match (aspect > 1.0, wm_y > avsize.y, hm_x > avsize.x) {
+			(true, false, _) | (false, _, true) => Vec2::new(wm_x, wm_y),
+			(true, true, _) | (false, _, false) => Vec2::new(hm_x, hm_y),
+		};
+
+		ui.allocate_ui_with_layout(
+			Vec2::new(avsize.x, tsize.y),
+			egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+			|ui| ui.image((tex.id(), tsize)),
+		);
+	}
+
+	fn start_preview(&mut self, ctx: &egui::Context) {
+		self.camera_thread.start(ctx.clone());
+	}
+
+	fn stop_preview(&mut self) {
+		self.camera_thread.stop();
+	}
+
+	fn start_recording(&mut self, ctx: &egui::Context) {
+		self.camera_thread.start_recording(ctx.clone());
+	}
+
+	fn stop_recording(&mut self) {
+		self.camera_thread.stop_recording();
+	}
+}
+
+impl eframe::App for App {
+	fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+		match self.rx.try_recv() {
+			Ok(Cl3Events::FrameReceive) => {
+				if let Some(preview) = self.preview.as_mut() {
+					let lock = self.camera_thread.frame();
+					let clrimg = ColorImage::from_rgb([lock.width, lock.height], &lock.data);
+					preview.set(clrimg, TextureOptions::default());
 				}
-				buffer.present();
-
-				fluff.window.request_redraw();
 			}
-			_ => (),
+			Err(TryRecvError::Disconnected) => unreachable!(),
+			Err(TryRecvError::Empty) => {}
 		}
 
-		fluff.common_events(&event, elwt);
-	})
-	.unwrap();
+		CentralPanel::default().show(ctx, |ui| {
+			ui.vertical(|ui| {
+				self.display_preview(ui);
+
+				if self.camera_thread.running() {
+					let button = egui::Button::new("Stop preview...");
+
+					if self.camera_thread.recording() {
+						ui.add_enabled(false, button);
+					} else if ui.add(button).clicked() {
+						self.stop_preview();
+					}
+				} else if ui.button("Start Preview").clicked() {
+					self.start_preview(ctx);
+				}
+
+				if self.camera_thread.recording() {
+					if ui.button("Stop recording...").clicked() {
+						self.stop_recording();
+					}
+				} else if ui.button("Start recording").clicked() {
+					self.start_recording(ctx);
+				}
+			});
+		});
+	}
 }

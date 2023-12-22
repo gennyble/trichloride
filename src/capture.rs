@@ -1,18 +1,23 @@
 use std::{
+	fs::File,
 	sync::{
 		atomic::{AtomicBool, Ordering},
-		Arc, RwLock,
+		mpsc::{channel, Receiver, Sender},
+		Arc, RwLock, RwLockReadGuard,
 	},
 	thread::JoinHandle,
 	time::{Duration, Instant},
 };
 
+use devout::{Devout, Framerate};
+use eframe::egui;
 use nokhwa::{
 	pixel_format::RgbFormat,
 	utils::{CameraIndex, RequestedFormat, RequestedFormatType},
 	Camera,
 };
-use winit::event_loop::EventLoopProxy;
+
+use crate::{Cl3Events, MuxerEvents};
 
 pub struct Frame {
 	pub data: Vec<u8>,
@@ -21,36 +26,110 @@ pub struct Frame {
 }
 
 pub struct CameraThread {
+	pub gui_tx: Sender<Cl3Events>,
+	pub camera_shutdown: Arc<AtomicBool>,
+
 	pub shared_frame: Arc<RwLock<Frame>>,
-	pub handle: Option<JoinHandle<()>>,
+	pub recording: Arc<AtomicBool>,
+	pub camera: Option<JoinHandle<()>>,
+
+	pub muxer: Option<JoinHandle<Receiver<MuxerEvents>>>,
+	pub muxer_tx: Sender<MuxerEvents>,
+	pub muxer_rx: Option<Receiver<MuxerEvents>>,
 }
 
 impl CameraThread {
-	// If the camera thread is alive, it joins. Otherwise it does nothing
-	pub fn join(&mut self) {
-		if let Some(handle) = self.handle.take() {
-			handle.join().unwrap();
+	pub fn new(sender: Sender<Cl3Events>) -> Self {
+		let (muxer_tx, muxer_rx) = channel();
+
+		Self {
+			gui_tx: sender,
+			camera_shutdown: Arc::new(AtomicBool::new(false)),
+
+			shared_frame: Arc::new(RwLock::new(Frame {
+				data: vec![],
+				width: 0,
+				height: 0,
+			})),
+			recording: Arc::new(AtomicBool::new(false)),
+			camera: None,
+
+			muxer: None,
+			muxer_tx,
+			muxer_rx: Some(muxer_rx),
 		}
 	}
-}
 
-/// The camera thread will send events to `frame_notify` to tell the caller
-/// that it's received a new frame
-pub fn start_camera(proxy: EventLoopProxy<()>, shutdown: Arc<AtomicBool>) -> CameraThread {
-	let frame = Frame {
-		data: vec![],
-		width: 0,
-		height: 0,
-	};
-	let shared_frame = Arc::new(RwLock::new(frame));
+	/// Starts capturing frames from the camera. The [egui::Context] `ctx` is
+	/// used to wakeup the GUI so it can receive the new frame.
+	pub fn start(&mut self, ctx: egui::Context) {
+		if self.camera.is_some() {
+			return;
+		}
 
-	let shared = shared_frame.clone();
-	let handle = std::thread::spawn(move || camera_runner(proxy, shutdown, shared));
-	println!("Camera thread spanwed!");
+		// make sure it doesn't immediatly shutdown
+		self.camera_shutdown.store(false, Ordering::Release);
 
-	CameraThread {
-		shared_frame,
-		handle: Some(handle),
+		let tx = self.gui_tx.clone();
+		let shutdown = self.camera_shutdown.clone();
+		let frame = self.shared_frame.clone();
+		let recording = self.recording.clone();
+		let mtx = self.muxer_tx.clone();
+		let handle =
+			std::thread::spawn(move || camera_runner(ctx, tx, shutdown, frame, recording, mtx));
+
+		self.camera = Some(handle);
+	}
+
+	/// Shuts down, if alive, the camera thread and then the recording thread.
+	pub fn stop(&mut self) {
+		if let Some(handle) = self.camera.take() {
+			// tell thread to shutdown
+			self.camera_shutdown.store(true, Ordering::Release);
+			handle.join().unwrap();
+		}
+
+		if let Some(handle) = self.muxer.take() {
+			self.recording.store(false, Ordering::Release);
+			self.muxer_tx.send(MuxerEvents::Shutdown).unwrap();
+			let muxer_rx = handle.join().unwrap();
+			self.muxer_rx = Some(muxer_rx);
+		}
+	}
+
+	pub fn start_recording(&mut self, ctx: egui::Context) {
+		if self.muxer.is_some() {
+			return;
+		}
+		self.start(ctx);
+
+		let frame = self.shared_frame.clone();
+		let muxer_rx = self.muxer_rx.take().unwrap();
+		let handle = std::thread::spawn(move || mp4_h264_writer(frame, muxer_rx));
+
+		self.muxer = Some(handle);
+		self.recording.store(true, Ordering::Release);
+	}
+
+	pub fn stop_recording(&mut self) {
+		if let Some(handle) = self.muxer.take() {
+			self.recording.store(false, Ordering::Release);
+			self.muxer_tx.send(MuxerEvents::Shutdown).unwrap();
+			let muxer_rx = handle.join().unwrap();
+			self.muxer_rx = Some(muxer_rx);
+		}
+	}
+
+	pub fn running(&self) -> bool {
+		self.camera.is_some()
+	}
+
+	pub fn recording(&self) -> bool {
+		self.muxer.is_some()
+	}
+
+	pub fn frame(&self) -> RwLockReadGuard<Frame> {
+		self.shared_frame.read().unwrap()
 	}
 }
 
@@ -58,9 +137,12 @@ pub const COLOUR: bool = true;
 pub const FRAMERATE: u32 = 30;
 
 pub fn camera_runner(
-	proxy: EventLoopProxy<()>,
+	ctx: egui::Context,
+	tx: Sender<Cl3Events>,
 	shutdown: Arc<AtomicBool>,
 	frame: Arc<RwLock<Frame>>,
+	recording: Arc<AtomicBool>,
+	muxer_tx: Sender<MuxerEvents>,
 ) {
 	let requested_format =
 		RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestResolution);
@@ -82,11 +164,6 @@ pub fn camera_runner(
 		lock.data.resize(width as usize * height as usize * 3, 0);
 	}
 
-	//TODO: use error to collect difference from last to expected MS
-	let mut last = Instant::now();
-	let mut error = Duration::ZERO;
-	const TARGET: Duration = Duration::from_millis(1000 / FRAMERATE as u64);
-
 	println!("Opening stream...");
 	camera.open_stream().unwrap();
 	println!("Opened! Entering loop");
@@ -99,31 +176,60 @@ pub fn camera_runner(
 		match camera.frame_raw() {
 			Err(_e) => (),
 			Ok(cow) => {
-				let now = Instant::now();
-				/*let acc = error + (now - last);
-				if acc < TARGET {
-					continue;
-				}*/
-
-				println!("Took frame at {}ms", (now - last).as_millis());
-				//let error = acc - TARGET;
-				last = now;
-
 				crate::nv12scary::yuv422_rgb(&cow, &mut rgb, width as usize);
 
 				{
 					let mut lock = frame.write().unwrap();
+					let data = &mut lock.data;
 
-					unsafe {
+					for (idx, px) in data.chunks_mut(3).enumerate() {
+						let new = ((rgb[idx * 3] as u32
+							+ rgb[idx * 3 + 1] as u32 + rgb[idx * 3 + 2] as u32)
+							/ 3) as u8;
+
+						//*px = (*px >> 8) | ((new as u32) << 16);
+						px[1] = px[0];
+						px[2] = px[1];
+						px[0] = new;
+					}
+
+					/*unsafe {
 						std::ptr::copy_nonoverlapping(
 							rgb.as_ptr(),
 							lock.data.as_mut_ptr(),
 							rgb.len(),
 						)
-					};
+					};*/
 				}
 
-				proxy.send_event(()).unwrap();
+				if recording.load(Ordering::Acquire) {
+					muxer_tx.send(MuxerEvents::FrameReceive).unwrap();
+				}
+
+				ctx.request_repaint();
+				tx.send(Cl3Events::FrameReceive).unwrap();
+			}
+		}
+	}
+}
+
+pub fn mp4_h264_writer(
+	frame: Arc<RwLock<Frame>>,
+	rx: Receiver<MuxerEvents>,
+) -> Receiver<MuxerEvents> {
+	let file = File::create("out.mp4").unwrap();
+	let mut h264 = Devout::new(file, Framerate::Whole(FRAMERATE));
+
+	loop {
+		match rx.recv() {
+			Err(_e) => (),
+			Ok(MuxerEvents::FrameReceive) => {
+				let read = frame.read().unwrap();
+				h264.frame(read.width as u32, read.height as u32, &read.data);
+			}
+			Ok(MuxerEvents::Shutdown) => {
+				h264.done();
+				break rx;
 			}
 		}
 	}
