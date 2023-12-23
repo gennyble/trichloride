@@ -10,3 +10,4 @@ openh264 = { version = "0.4.0", default-features = false, features = ["encoder"]
 mp4 = "0.13.0"
 # I do not like Bytes, but Mp4 demands it
 bytes = "1.4"
+x264 = "0.5.0"

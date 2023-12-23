@@ -69,6 +69,7 @@ impl<W: Write + Seek> Drop for WriterWrapper<W> {
 
 pub struct Devout<W: Write + Seek> {
 	framerate: Framerate,
+	bitrate_kbps: u32,
 	encoder: Option<Maybeh264>,
 	writer: WriterWrapper<W>,
 	sample_buffer: BytesMut,
@@ -89,6 +90,7 @@ impl<W: Write + Seek> Devout<W> {
 	pub fn new<R: Into<Framerate>>(writer: W, framerate: R) -> Self {
 		Self {
 			framerate: framerate.into(),
+			bitrate_kbps: 1000,
 			encoder: None,
 			writer: WriterWrapper::new(writer),
 			sample_buffer: BytesMut::new(),
@@ -110,18 +112,24 @@ impl<W: Write + Seek> Devout<W> {
 	) -> Self {
 		Self {
 			framerate: framerate.into(),
-			encoder: Some(Self::init_encoder(width, height)),
+			bitrate_kbps: 1000,
+			encoder: Some(Self::init_encoder(width, height, 1000)),
 			writer: WriterWrapper::new(writer),
 			sample_buffer: BytesMut::new(),
 			ticks: 0,
 		}
 	}
 
-	fn init_encoder(width: u32, height: u32) -> Maybeh264 {
-		let encoder = Encoder::with_config(
-			EncoderConfig::new(width as u32, height as u32).set_bitrate_bps(22_000_000),
-		)
-		.unwrap();
+	/// Set the bitrate in metric kilobits per second. Only applies if the
+	/// encoder has not yet been created.
+	pub fn set_bitrate(&mut self, kbps: u32) {
+		self.bitrate_kbps = kbps;
+	}
+
+	fn init_encoder(width: u32, height: u32, kbps: u32) -> Maybeh264 {
+		let encoder =
+			Encoder::with_config(EncoderConfig::new(width, height).set_bitrate_bps(kbps * 1000))
+				.unwrap();
 		let yuvbuffer = YUVBuffer::new(width as usize, height as usize);
 
 		Maybeh264 { encoder, yuvbuffer }
@@ -139,7 +147,7 @@ impl<W: Write + Seek> Devout<W> {
 	pub fn frame(&mut self, width: u32, height: u32, data: &[u8]) {
 		/* TODO: gen- Write this, lol */
 		#[rustfmt::skip]
-		let encoder = self.encoder.get_or_insert_with(|| Self::init_encoder(width, height));
+		let encoder = self.encoder.get_or_insert_with(|| Self::init_encoder(width, height, self.bitrate_kbps));
 		encoder.yuvbuffer.read_rgb(data);
 		self.write_frame::<YUV420Wrapper>(width, height, None)
 	}
@@ -165,7 +173,7 @@ impl<W: Write + Seek> Devout<W> {
 
 	fn write_frame<Y: YUVSource>(&mut self, width: u32, height: u32, yuv: Option<&Y>) {
 		#[rustfmt::skip]
-		let encoder = self.encoder.get_or_insert_with(|| Self::init_encoder(width, height));
+		let encoder = self.encoder.get_or_insert_with(|| Self::init_encoder(width, height, self.bitrate_kbps));
 		let bitstream = match yuv {
 			Some(yuv) => encoder.encoder.encode(yuv).unwrap(),
 			None => encoder.encoder.encode(&encoder.yuvbuffer).unwrap(),
@@ -184,12 +192,14 @@ impl<W: Write + Seek> Devout<W> {
 		let mp4_writer = self.writer.mp4_or_create_with(mp4_init_closure);
 		let bytes = Self::fill_sample_buffer(&mut self.sample_buffer, &bitstream);
 
+		let is_sync = bitstream.frame_type() == openh264::encoder::FrameType::IDR;
+
 		let duration = self.framerate.tpf();
 		let sample = Mp4Sample {
 			start_time: self.ticks,
 			duration,
 			rendering_offset: 0,
-			is_sync: false,
+			is_sync,
 			bytes,
 		};
 		self.ticks += duration as u64;
