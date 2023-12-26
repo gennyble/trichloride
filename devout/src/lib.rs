@@ -1,28 +1,35 @@
+use core::fmt;
 use std::io::{Seek, Write};
 
 use bytes::BytesMut;
 use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig};
 use openh264::{
 	encoder::{EncodedBitStream, Encoder, EncoderConfig},
-	formats::{YUVBuffer, YUVSource},
+	formats::YUVBuffer,
 };
+
+#[rustfmt::skip]
+/*pub*/ use openh264::formats::YUVSource;
+
+pub use util::Framerate;
+use util::YUV420Wrapper;
+
+mod util;
 
 struct WriterWrapper<W: Write + Seek> {
 	writer: Option<W>,
 	mp4_writer: Option<Mp4Writer<W>>,
-	finalize_on_drop: bool,
 }
 
 impl<W: Write + Seek> WriterWrapper<W> {
-	pub fn new(writer: W) -> Self {
+	fn new(writer: W) -> Self {
 		Self {
 			writer: Some(writer),
 			mp4_writer: None,
-			finalize_on_drop: true,
 		}
 	}
 
-	pub fn mp4_or_create_with<F>(&mut self, f: F) -> &mut Mp4Writer<W>
+	fn mp4_or_create_with<F>(&mut self, f: F) -> &mut Mp4Writer<W>
 	where
 		F: FnOnce(W) -> Mp4Writer<W>,
 	{
@@ -38,29 +45,10 @@ impl<W: Write + Seek> WriterWrapper<W> {
 			self.mp4_writer.get_or_insert_with(init)
 		}
 	}
-
-	/// Whether or not we should call `done` on drop. Failure to call done
-	/// will result in a corrupt MP4.
-	pub fn finalize_on_drop(&mut self, finalize_flag: bool) {
-		self.finalize_on_drop = finalize_flag;
-	}
-
-	//TODO: gen- Do better
-	fn done(mut self) -> Result<(), mp4::Error> {
-		if let Some(mut writer) = self.mp4_writer.take() {
-			writer.write_end()
-		} else {
-			Ok(())
-		}
-	}
 }
 
 impl<W: Write + Seek> Drop for WriterWrapper<W> {
 	fn drop(&mut self) {
-		if !self.finalize_on_drop {
-			return;
-		}
-
 		if let Some(ref mut writer) = self.mp4_writer {
 			writer.write_end().unwrap()
 		}
@@ -85,8 +73,7 @@ struct Maybeh264 {
 impl<W: Write + Seek> Devout<W> {
 	/// Get a new instance. All this does is form the struct. All initialization
 	/// of the H264 encoder and MP4 writer is done on the first frame. If you
-	/// want to create the H264 encoder at the same time, use new_with_dimensions
-	//TODO: gen- Link to referred method above
+	/// want to create the H264 encoder at the same time, use [Devout::new_with_dimensions()]
 	pub fn new<R: Into<Framerate>>(writer: W, framerate: R) -> Self {
 		Self {
 			framerate: framerate.into(),
@@ -98,12 +85,12 @@ impl<W: Write + Seek> Devout<W> {
 		}
 	}
 
-	/// Get a new ['Devout'] and create the internal H264 encoder at the same
+	/// Get a new [Devout] and create the internal H264 encoder at the same
 	/// time.
 	///
 	/// Note, we still create the MP4 writer upon receiving the first
-	/// frame as there is information we can only gather after feeding OpenH264
-	/// at least one frame.
+	/// frame as there is information we can only gather after feeding the
+	/// encoder at least one frame.
 	pub fn new_with_dimensions<R: Into<Framerate>>(
 		writer: W,
 		framerate: R,
@@ -137,13 +124,23 @@ impl<W: Write + Seek> Devout<W> {
 
 	/// To be called when you're done writing data. Writes the last of the MP4.
 	///
-	/// Failing to call this method will create a corrupt MP4.
+	/// This method is called when [Devout] is dropped, but you can call it
+	/// manually here to catch errors.
 	pub fn done(mut self) {
+		self.borrwed_done();
+	}
+
+	/// I want [Devout::done()] to take ownership, but I also want to be able
+	/// to call done directly (and not reimplement) in drop, so they both just
+	/// call this.
+	fn borrwed_done(&mut self) {
 		let mut mp4 = self.writer.mp4_writer.take().unwrap();
 		mp4.write_end().unwrap();
 	}
 
-	/// Take a frame, as 24bit RGB, and push it through into the video. If
+	/// Take a frame, as 24bit RGB, and push it through into the video. If the
+	/// encoder has not yet been initialized, it will be created on first call
+	/// of this function.
 	pub fn frame(&mut self, width: u32, height: u32, data: &[u8]) {
 		/* TODO: gen- Write this, lol */
 		#[rustfmt::skip]
@@ -152,7 +149,11 @@ impl<W: Write + Seek> Devout<W> {
 		self.write_frame::<YUV420Wrapper>(width, height, None)
 	}
 
-	/// Take a frame already encoded as YU 4:2:0 and push it to the video stream
+	/// Take a frame already encoded as YUV 4:2:0 and push it to the video
+	/// stream.
+	///
+	/// YUV data must be planar and arranged so that all Y values appear, then
+	/// all U, then all V.
 	pub fn frame_yuv420(&mut self, width: u32, height: u32, data: &[u8]) {
 		//TODO: check width/height is correct with known width/height AND with data given
 		self.write_frame(
@@ -166,7 +167,9 @@ impl<W: Write + Seek> Devout<W> {
 		)
 	}
 
-	pub fn frame_yuvsource<Y: YUVSource>(&mut self, source: &Y) {
+	/// Take a frame in the YUV colorspce, described by
+	/// [openh264::foramts::YUVSource] and feed it to the encoder.
+	fn frame_yuvsource<Y: YUVSource>(&mut self, source: &Y) {
 		//TODO: check width/height is correct with known width/height AND with data given
 		self.write_frame(source.width() as u32, source.height() as u32, Some(source))
 	}
@@ -294,6 +297,10 @@ impl<W: Write + Seek> Devout<W> {
 				let length = nal_data.len() as u32;
 
 				// We don't want/need to write out Sequence Parameter Sets
+				// gen, later- I guess we do because if I uncomment the conditional
+				// then the video freezes some of the way in. I suspect this is
+				// related to keyframes, but I haven't looked at the bitstream in
+				// detail yet.
 				//if nal_data[0] & 0x1F != 7 {
 				buffer.extend_from_slice(&length.to_be_bytes());
 				buffer.extend_from_slice(nal_data);
@@ -305,126 +312,31 @@ impl<W: Write + Seek> Devout<W> {
 	}
 }
 
-//TODO: gen- Make use of this, lol. Just wanted to draft it. For non whole
-// framrates *(looking at you 29.97)* that aren't declared here, I think we
-// should take a numerator and a denomenator. Maybe we can make them from a
-// float? how do the calculators and stuff get the denom and numerator from
-// a decimal. do they just try numbers until it works? do I need a lookup table?
-// I do not want to make a lookup table.
-pub enum Framerate {
-	/// That weird 29.97 FPS of NTSC.
-	///
-	/// Here's a video by Stand-up Maths about that if you were curious like, why its like that.
-	/// <https://www.youtube.com/watch?v=3GJUM6pCpew>
-	NTSC,
-	/// 25 FPS
-	PAL,
-	/// 24 FPS. Commonly used in movies.
-	TwentyFour,
-	/// 30 FPS
-	Thirty,
-	/// 60 FPS
-	Sixty,
-	/// Whole numbered FPS. This number * 1000 is the timescale.
-	Whole(u32),
-	// Oh no.
-	Custom {
-		ticks_per_frame: u32,
-		timescale: u32,
-	},
+impl<W: Write + Seek> std::ops::Drop for Devout<W> {
+	fn drop(&mut self) {
+		self.borrwed_done();
+	}
 }
 
-impl Framerate {
-	pub fn tpf(&self) -> u32 {
-		match self {
-			Framerate::NTSC => 100,
-			Framerate::PAL => 1000,
-			Framerate::TwentyFour => 1000,
-			Framerate::Thirty => 512,
-			Framerate::Sixty => 256,
-			Framerate::Whole(_) => 1000,
-			Framerate::Custom {
-				ticks_per_frame, ..
-			} => *ticks_per_frame,
-		}
-	}
+#[derive(Debug)]
+pub enum DevoutError {
+	Mp4Error(mp4::Error),
+}
 
-	pub fn timescale(&self) -> u32 {
+impl std::error::Error for DevoutError {}
+
+impl fmt::Display for DevoutError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Framerate::NTSC => 2997,
-			Framerate::PAL => 25000,
-			Framerate::TwentyFour => 24000,
-			// FFMPEG uses this and I think it's cute
-			Framerate::Thirty => 15360,
-			Framerate::Sixty => 15360,
-			Framerate::Whole(w) => *w * 1000,
-			Framerate::Custom { timescale, .. } => *timescale,
+			Self::Mp4Error(mp4e) => {
+				write!(f, "error writing mp4: {mp4e}")
+			}
 		}
 	}
 }
 
-impl Into<Framerate> for u8 {
-	fn into(self) -> Framerate {
-		Framerate::Whole(self as u32)
-	}
-}
-
-impl Into<Framerate> for u16 {
-	fn into(self) -> Framerate {
-		Framerate::Whole(self as u32)
-	}
-}
-
-impl Into<Framerate> for u32 {
-	fn into(self) -> Framerate {
-		Framerate::Whole(self)
-	}
-}
-
-struct YUV420Wrapper<'a> {
-	width: usize,
-	height: usize,
-	bytes: &'a [u8],
-}
-
-// Based off https://docs.rs/openh264/latest/src/openh264/formats/rgb2yuv.rs.html#4-8
-impl<'a> YUVSource for YUV420Wrapper<'a> {
-	fn width(&self) -> i32 {
-		self.width as i32
-	}
-
-	fn height(&self) -> i32 {
-		self.height as i32
-	}
-
-	fn y(&self) -> &[u8] {
-		&self.bytes[..self.width * self.height]
-	}
-
-	fn u(&self) -> &[u8] {
-		let base_u = self.width * self.height;
-		// This looked weird to me in the openh264-rust crate, but I understand it now.
-		// The end part of the range is there because we *start* there, and then we add
-		// the length of the U channel, which is a quarter of the width * height. But
-		// `base_u` is already that, so we use it again and divide by 4.
-		&self.bytes[base_u..base_u + base_u / 4]
-	}
-
-	fn v(&self) -> &[u8] {
-		let base_u = self.width * self.height;
-		let base_v = base_u + base_u / 4;
-		&self.bytes[base_v..]
-	}
-
-	fn y_stride(&self) -> i32 {
-		self.width as i32
-	}
-
-	fn u_stride(&self) -> i32 {
-		(self.width / 2) as i32
-	}
-
-	fn v_stride(&self) -> i32 {
-		(self.width / 2) as i32
+impl From<mp4::Error> for DevoutError {
+	fn from(mp4e: mp4::Error) -> Self {
+		Self::Mp4Error(mp4e)
 	}
 }

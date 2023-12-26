@@ -6,8 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-openh264 = { version = "0.4.0", default-features = false, features = ["encoder"] }
 mp4 = "0.13.0"
-# I do not like Bytes, but Mp4 demands it
+# I do not like Bytes, but Mp4 demands it.
+# why don't i like Bytes?
 bytes = "1.4"
-x264 = "0.5.0"
+# later! later.
+#x264 = "0.5.0"
+
+[dependencies.openh264]
+version = "0.4.0"
+default-features = false
+features = ["encoder"]
