@@ -71,7 +71,9 @@ struct Maybeh264 {
 }
 
 impl<W: Write + Seek> Devout<W> {
-	/// Get a new instance. All this does is form the struct. All initialization
+	/// Get a new instance.
+	///
+	/// All this does is form the struct. All initialization
 	/// of the H264 encoder and MP4 writer is done on the first frame. If you
 	/// want to create the H264 encoder at the same time, use [Devout::new_with_dimensions()]
 	pub fn new<R: Into<Framerate>>(writer: W, framerate: R) -> Self {
@@ -149,6 +151,10 @@ impl<W: Write + Seek> Devout<W> {
 		self.write_frame::<YUV420Wrapper>(width, height, None)
 	}
 
+	//TODO: gen- terrible name
+	/// Like [Devout::frame()] but returns the bitstream from the H264 encoder.
+	pub fn frame_returned() {}
+
 	/// Take a frame already encoded as YUV 4:2:0 and push it to the video
 	/// stream.
 	///
@@ -195,6 +201,8 @@ impl<W: Write + Seek> Devout<W> {
 		let mp4_writer = self.writer.mp4_or_create_with(mp4_init_closure);
 		let bytes = Self::fill_sample_buffer(&mut self.sample_buffer, &bitstream);
 
+		// IDR frames mark previous frames as unused for reference, which means
+		// this is a good seek point. Without this you get an unseekable MP4
 		let is_sync = bitstream.frame_type() == openh264::encoder::FrameType::IDR;
 
 		let duration = self.framerate.tpf();

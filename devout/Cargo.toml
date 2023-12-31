@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-mp4 = "0.13.0"
+mp4 = "0.14.0"
 # I do not like Bytes, but Mp4 demands it.
 # why don't i like Bytes?
 bytes = "1.4"
