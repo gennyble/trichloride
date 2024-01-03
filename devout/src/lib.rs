@@ -1,5 +1,9 @@
 use core::fmt;
-use std::io::{Seek, Write};
+use std::{
+	fs::File,
+	io::{BufWriter, Seek, Write},
+	path::Path,
+};
 
 use bytes::BytesMut;
 use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig};
@@ -68,6 +72,16 @@ pub struct Devout<W: Write + Seek> {
 struct Maybeh264 {
 	encoder: Encoder,
 	yuvbuffer: YUVBuffer,
+}
+
+impl Devout<BufWriter<File>> {
+	/// Get a new [Devout] that's writing to a buffered file.
+	pub fn file<P: AsRef<Path>, R: Into<Framerate>>(
+		path: P,
+		framerate: R,
+	) -> Result<Self, std::io::Error> {
+		Ok(Self::new(BufWriter::new(File::create(path)?), framerate))
+	}
 }
 
 impl<W: Write + Seek> Devout<W> {
